@@ -2,13 +2,17 @@
 
 RustySynth is a SoundFont MIDI synthesizer written in pure Rust, ported from [MeltySynth](https://github.com/sinshu/meltysynth).
 
+I made it support multi-threaded rendering by using [rayon](https://github.com/rayon-rs/rayon) so I could render some black MIDIs.
+
+**DO NOT open the exported wav file directly and listen to it, it is very loud!**
 
 
 ## Features
 
-* Suitable for both real-time and offline synthesis.
-* Supports standard MIDI files with additional features including dynamic tempo changing.
-* No dependencies other than the standard library.
+* ~~Suitable for both real-time and offline synthesis.~~ For offline only
+* ~~Supports standard MIDI files with additional features including dynamic tempo changing.~~ Currently only MIDI 1 is supported
+* ~~No dependencies other than the standard library.~~
+* It only took about 50 seconds to render 18 million notes.
 
 
 

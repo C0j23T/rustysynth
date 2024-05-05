@@ -3,6 +3,7 @@
 use std::io;
 use std::io::ErrorKind;
 use std::io::Read;
+use std::io::Seek;
 use std::slice;
 use std::str;
 
@@ -53,6 +54,12 @@ impl BinaryReader {
         let mut data: [u8; 2] = [0; 2];
         reader.read_exact(&mut data)?;
         Ok(i16::from_be_bytes(data))
+    }
+
+    pub(crate) fn read_u16_big_endian<R: Read>(reader: &mut R) -> Result<u16, io::Error> {
+        let mut data: [u8; 2] = [0; 2];
+        reader.read_exact(&mut data)?;
+        Ok(u16::from_be_bytes(data))
     }
 
     pub(crate) fn read_i32_big_endian<R: Read>(reader: &mut R) -> Result<i32, io::Error> {
@@ -115,7 +122,7 @@ impl BinaryReader {
         Ok(str::from_utf8(&data[0..actual_length]).unwrap().to_string())
     }
 
-    pub(crate) fn discard_data<R: Read>(reader: &mut R, size: usize) -> Result<(), io::Error> {
+    pub(crate) fn discard_data<R: Read + Seek>(reader: &mut R, size: usize) -> Result<(), io::Error> {
         let mut data: Vec<u8> = vec![0; size];
         reader.read_exact(&mut data)
     }

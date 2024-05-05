@@ -1,6 +1,14 @@
 #![allow(dead_code)]
 
+use std::cmp;
+use std::io::Cursor;
 use std::io::Read;
+use std::io::Seek;
+
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 
 use crate::binary_reader::BinaryReader;
 use crate::four_cc::FourCC;
@@ -131,8 +139,8 @@ impl Message {
 /// Represents a standard MIDI file.
 #[non_exhaustive]
 pub struct MidiFile {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) times: Vec<f64>,
+    pub tracks: Vec<MidiTrack>,
+    pub(crate) length: f64,
 }
 
 impl MidiFile {
@@ -171,6 +179,7 @@ impl MidiFile {
             return Err(MidiFileError::InvalidChunkType {
                 expected: FourCC::from_bytes(*b"MThd"),
                 actual: chunk_type,
+                at: 0,
             });
         }
 
@@ -182,50 +191,80 @@ impl MidiFile {
         }
 
         let format = BinaryReader::read_i16_big_endian(reader)?;
-        if !(format == 0 || format == 1) {
+        if format != 1 {
             return Err(MidiFileError::UnsupportedFormat(format));
         }
 
         let track_count = BinaryReader::read_i16_big_endian(reader)? as i32;
         let resolution = BinaryReader::read_i16_big_endian(reader)? as i32;
 
-        let mut message_lists: Vec<Vec<Message>> = Vec::new();
-        let mut tick_lists: Vec<Vec<i32>> = Vec::new();
+        let mut cursor = {
+            let mut rest_data = Vec::new();
+            reader.read_to_end(&mut rest_data)?;
+            Cursor::new(rest_data)
+        };
 
-        for _i in 0..track_count {
-            let (message_list, tick_list) = MidiFile::read_track(reader, loop_type)?;
-            message_lists.push(message_list);
-            tick_lists.push(tick_list);
+        let track_addrs = MidiFile::track_addr(&mut cursor, track_count)?;
+        cursor.set_position(0);
+        let mut data = Vec::new();
+        cursor.read_to_end(&mut data)?;
+        drop(cursor);
+
+        let mut tracks_result = track_addrs
+            .par_iter()
+            .map(|(start, len)| {
+                let mut reader = Cursor::new(&data[*start..*start + len]);
+                MidiFile::read_track(&mut reader, loop_type)
+            })
+            .collect::<Vec<Result<Vec<(Message, i32)>, MidiFileError>>>();
+        drop(data);
+
+        let mut tracks = Vec::new();
+        while let Some(track) = tracks_result.pop() {
+            tracks.push(track?);
+        }
+
+        let tempo_track = tracks
+            .iter()
+            .filter(|x| {
+                x.iter()
+                    .any(|(y, _)| y.get_message_type() == Message::TEMPO_CHANGE)
+            })
+            .cloned()
+            .collect::<Vec<Vec<(Message, i32)>>>();
+
+        if let Some(track) = tempo_track.first() {
+            tracks.par_iter_mut().for_each(|x| {
+                x.extend(track);
+                x.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+            });
         }
 
         match loop_type {
             MidiFileLoopType::LoopPoint(loop_point) if loop_point != 0 => {
                 let loop_point = loop_point as i32;
-                let tick_list = &mut tick_lists[0];
-                let message_list = &mut message_lists[0];
+                let track = &mut tracks[0];
 
-                if loop_point <= *tick_list.last().unwrap() {
-                    for i in 0..tick_list.len() {
-                        if tick_list[i] >= loop_point {
-                            tick_list.insert(i, loop_point);
-                            message_list.insert(i, Message::loop_start());
+                if loop_point <= track.last().unwrap().1 {
+                    for i in 0..track.len() {
+                        if track[i].1 >= loop_point {
+                            track.insert(i, (Message::loop_start(), loop_point));
                             break;
                         }
                     }
                 } else {
-                    tick_list.push(loop_point);
-                    message_list.push(Message::loop_start());
+                    track.push((Message::loop_start(), loop_point));
                 }
             }
             _ => (),
         }
 
-        let (messages, times) = MidiFile::merge_tracks(&message_lists, &tick_lists, resolution);
+        let (tracks, length) = MidiFile::merge_tracks(tracks, resolution);
 
-        Ok(Self { messages, times })
+        Ok(Self { tracks, length })
     }
 
-    fn discard_data<R: Read>(reader: &mut R) -> Result<(), MidiFileError> {
+    fn discard_data<R: Read + Seek>(reader: &mut R) -> Result<(), MidiFileError> {
         let size = BinaryReader::read_i32_variable_length(reader)? as usize;
         BinaryReader::discard_data(reader, size)?;
         Ok(())
@@ -244,23 +283,50 @@ impl MidiFile {
         Ok((b1 << 16) | (b2 << 8) | b3)
     }
 
-    fn read_track<R: Read>(
+    pub(crate) fn track_addr<R: Read + Seek>(
+        reader: &mut R,
+        track_count: i32,
+    ) -> Result<Vec<(usize, usize)>, MidiFileError> {
+        let mut result = Vec::new();
+
+        let mut index = 0;
+        for _ in 0..track_count {
+            let chunk_type = BinaryReader::read_four_cc(reader)?;
+            if chunk_type != b"MTrk" {
+                return Err(MidiFileError::InvalidChunkType {
+                    expected: FourCC::from_bytes(*b"MTrk"),
+                    actual: chunk_type,
+                    at: index as u64,
+                });
+            }
+            let mut size = BinaryReader::read_i32_big_endian(reader)? as usize;
+            BinaryReader::discard_data(reader, size)?;
+
+            size += 8;
+            result.push((index, size));
+            index += size;
+        }
+
+        Ok(result)
+    }
+
+    pub(crate) fn read_track<R: Read + Seek>(
         reader: &mut R,
         loop_type: MidiFileLoopType,
-    ) -> Result<(Vec<Message>, Vec<i32>), MidiFileError> {
+    ) -> Result<Vec<(Message, i32)>, MidiFileError> {
         let chunk_type = BinaryReader::read_four_cc(reader)?;
         if chunk_type != b"MTrk" {
             return Err(MidiFileError::InvalidChunkType {
                 expected: FourCC::from_bytes(*b"MTrk"),
                 actual: chunk_type,
+                at: reader.stream_position().unwrap_or(0),
             });
         }
 
         let size = BinaryReader::read_i32_big_endian(reader)? as usize;
         let reader = &mut ReadCounter::new(reader);
 
-        let mut messages: Vec<Message> = Vec::new();
-        let mut ticks: Vec<i32> = Vec::new();
+        let mut events = Vec::new();
 
         let mut tick: i32 = 0;
         let mut last_status: u8 = 0;
@@ -274,12 +340,10 @@ impl MidiFile {
             if (first & 128) == 0 {
                 let command = last_status & 0xF0;
                 if command == 0xC0 || command == 0xD0 {
-                    messages.push(Message::common1(last_status, first));
-                    ticks.push(tick);
+                    events.push((Message::common1(last_status, first), tick));
                 } else {
                     let data2 = BinaryReader::read_u8(reader)?;
-                    messages.push(Message::common2(last_status, first, data2, loop_type));
-                    ticks.push(tick);
+                    events.push((Message::common2(last_status, first, data2, loop_type), tick));
                 }
 
                 continue;
@@ -291,8 +355,7 @@ impl MidiFile {
                 0xFF => match BinaryReader::read_u8(reader)? {
                     0x2F => {
                         BinaryReader::read_u8(reader)?;
-                        messages.push(Message::end_of_track());
-                        ticks.push(tick);
+                        events.push((Message::end_of_track(), tick));
 
                         // Some MIDI files may have events inserted after the EOT.
                         // Such events should be ignored.
@@ -300,11 +363,10 @@ impl MidiFile {
                             BinaryReader::discard_data(reader, size - reader.bytes_read())?;
                         }
 
-                        return Ok((messages, ticks));
+                        return Ok(events);
                     }
                     0x51 => {
-                        messages.push(Message::tempo_change(MidiFile::read_tempo(reader)?));
-                        ticks.push(tick);
+                        events.push((Message::tempo_change(MidiFile::read_tempo(reader)?), tick));
                     }
                     _ => MidiFile::discard_data(reader)?,
                 },
@@ -312,13 +374,11 @@ impl MidiFile {
                     let command = first & 0xF0;
                     if command == 0xC0 || command == 0xD0 {
                         let data1 = BinaryReader::read_u8(reader)?;
-                        messages.push(Message::common1(first, data1));
-                        ticks.push(tick);
+                        events.push((Message::common1(first, data1), tick));
                     } else {
                         let data1 = BinaryReader::read_u8(reader)?;
                         let data2 = BinaryReader::read_u8(reader)?;
-                        messages.push(Message::common2(first, data1, data2, loop_type));
-                        ticks.push(tick);
+                        events.push((Message::common2(first, data1, data2, loop_type), tick));
                     }
                 }
             }
@@ -327,15 +387,21 @@ impl MidiFile {
         }
     }
 
-    fn merge_tracks(
-        message_lists: &[Vec<Message>],
-        tick_lists: &[Vec<i32>],
-        resolution: i32,
-    ) -> (Vec<Message>, Vec<f64>) {
-        let mut merged_messages: Vec<Message> = Vec::new();
-        let mut merged_times: Vec<f64> = Vec::new();
+    pub(crate) fn cast_delta(track: Vec<(Message, i32)>, resolution: i32) -> (MidiTrack, f64) {
+        if track.is_empty() {
+            return (
+                MidiTrack {
+                    messages: Vec::new(),
+                    times: Vec::new(),
+                },
+                0.0,
+            );
+        }
 
-        let mut indices: Vec<usize> = vec![0; message_lists.len()];
+        let mut messages = Vec::new();
+        let mut times = Vec::new();
+
+        let mut index = 0;
 
         let mut current_tick: i32 = 0;
         let mut current_time: f64 = 0.0;
@@ -343,45 +409,67 @@ impl MidiFile {
         let mut tempo: f64 = 120.0;
 
         loop {
-            let mut min_tick = i32::MAX;
-            let mut min_index: i32 = -1;
-
-            for ch in 0..tick_lists.len() {
-                if indices[ch] < tick_lists[ch].len() {
-                    let tick = tick_lists[ch][indices[ch]];
-                    if tick < min_tick {
-                        min_tick = tick;
-                        min_index = ch as i32;
-                    }
-                }
-            }
-
-            if min_index == -1 {
+            if index >= track.len() {
                 break;
             }
 
-            let next_tick = tick_lists[min_index as usize][indices[min_index as usize]];
+            let next_tick = track[index].1;
             let delta_tick = next_tick - current_tick;
             let delta_time = 60.0 / (resolution as f64 * tempo) * delta_tick as f64;
 
             current_tick += delta_tick;
             current_time += delta_time;
 
-            let message = message_lists[min_index as usize][indices[min_index as usize]];
+            let message = track[index].0;
             if message.get_message_type() == Message::TEMPO_CHANGE {
                 tempo = message.get_tempo();
             } else {
-                merged_messages.push(message);
-                merged_times.push(current_time);
+                messages.push(message);
+                times.push(current_time);
             }
 
-            indices[min_index as usize] += 1;
+            index += 1;
         }
 
-        (merged_messages, merged_times)
+        (MidiTrack { messages, times }, current_time)
+    }
+
+    fn merge_tracks(tracks: Vec<Vec<(Message, i32)>>, resolution: i32) -> (Vec<MidiTrack>, f64) {
+        let tracks = tracks
+            .into_par_iter()
+            .map(|track| MidiFile::cast_delta(track, resolution))
+            .collect::<Vec<(MidiTrack, f64)>>();
+
+        let length = if let Some((_, len)) = tracks
+            .par_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(cmp::Ordering::Equal))
+        {
+            *len
+        } else {
+            0.0
+        };
+
+        let tracks = tracks
+            .into_iter()
+            .map(|(track, _)| track)
+            .collect::<Vec<MidiTrack>>();
+
+        (tracks, length)
     }
 
     /// Get the length of the MIDI file in seconds.
+    pub fn get_length(&self) -> f64 {
+        self.length
+    }
+}
+
+#[non_exhaustive]
+pub struct MidiTrack {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) times: Vec<f64>,
+}
+
+impl MidiTrack {
     pub fn get_length(&self) -> f64 {
         *self.times.last().unwrap()
     }

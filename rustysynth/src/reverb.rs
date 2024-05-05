@@ -151,19 +151,15 @@ impl Reverb {
     pub(crate) fn process(
         &mut self,
         input: &[f32],
-        output_left: &mut [f32],
-        output_right: &mut [f32],
+        output_left: &mut Vec<f32>,
+        output_right: &mut Vec<f32>,
     ) {
         let input_length = input.len();
         let output_left_length = output_left.len();
-        let output_right_length = output_right.len();
+        let empty = vec![0.0; output_left_length];
 
-        for lsample in output_left.iter_mut().take(output_left_length) {
-            *lsample = 0_f32;
-        }
-        for rsample in output_right.iter_mut().take(output_right_length) {
-            *rsample = 0_f32;
-        }
+        *output_left = empty.clone();
+        *output_right = empty;
 
         for cf in self.cfs_l.iter_mut() {
             cf.process(input, output_left);

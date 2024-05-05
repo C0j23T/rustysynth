@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::io::Read;
+use std::io::{Read, Seek};
 
 use crate::binary_reader::BinaryReader;
 use crate::error::SoundFontError;
@@ -25,7 +25,7 @@ pub struct SoundFontInfo {
 }
 
 impl SoundFontInfo {
-    pub(crate) fn new<R: Read>(reader: &mut R) -> Result<Self, SoundFontError> {
+    pub(crate) fn new<R: Read + Seek>(reader: &mut R) -> Result<Self, SoundFontError> {
         let chunk_id = BinaryReader::read_four_cc(reader)?;
         if chunk_id != b"LIST" {
             return Err(SoundFontError::ListChunkNotFound);

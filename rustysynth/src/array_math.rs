@@ -18,4 +18,10 @@ impl ArrayMath {
             a += step;
         }
     }
+
+    pub(crate) fn sum(source: &[f32], target: &mut [f32]) {
+        for (src, dest) in source.iter().zip(target.iter_mut()) {
+            *dest += src;
+        }
+    }
 }

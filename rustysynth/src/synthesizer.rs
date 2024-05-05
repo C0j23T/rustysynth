@@ -40,6 +40,8 @@ pub struct Synthesizer {
     master_volume: f32,
 
     effects: Option<Effects>,
+
+    empty_buffer: Vec<f32>,
 }
 
 impl Synthesizer {
@@ -91,6 +93,7 @@ impl Synthesizer {
 
         let block_left: Vec<f32> = vec![0_f32; settings.block_size];
         let block_right: Vec<f32> = vec![0_f32; settings.block_size];
+        let empty_buffer: Vec<f32> = vec![0_f32; settings.block_size];
 
         let inverse_block_size = 1_f32 / settings.block_size as f32;
 
@@ -119,6 +122,7 @@ impl Synthesizer {
             block_read,
             master_volume,
             effects,
+            empty_buffer,
         })
     }
 
@@ -360,10 +364,8 @@ impl Synthesizer {
         self.voices
             .process(&self.sound_font.wave_data, &self.channels);
 
-        for t in 0..self.block_size {
-            self.block_left[t] = 0_f32;
-            self.block_right[t] = 0_f32;
-        }
+        self.block_left = self.empty_buffer.clone();
+        self.block_right = self.empty_buffer.clone();
 
         for voice in self.voices.get_active_voices().iter_mut() {
             let previous_gain_left = self.master_volume * voice.previous_mix_gain_left;
@@ -436,8 +438,8 @@ impl Synthesizer {
 
             let reverb = &mut effects.reverb;
             let reverb_input = &mut effects.reverb_input[..];
-            let reverb_output_left = &mut effects.reverb_output_left[..];
-            let reverb_output_right = &mut effects.reverb_output_right[..];
+            let reverb_output_left = &mut effects.reverb_output_left;
+            let reverb_output_right = &mut effects.reverb_output_right;
             for input in reverb_input.iter_mut().take(self.block_size) {
                 *input = 0_f32;
             }

@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 rustysynth = { path = "../rustysynth" }
+hound = "3.5.1"
+indicatif = { version = "0.17.8", features = ["rayon"] }

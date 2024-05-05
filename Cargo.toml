@@ -3,7 +3,6 @@
 members = [
     "workspace",
     "rustysynth",
-    "rustysynth_test",
 ]
 
 resolver = "2"

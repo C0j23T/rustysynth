@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::sync::Arc;
 
 use crate::binary_reader::BinaryReader;
@@ -30,7 +30,7 @@ impl SoundFont {
     /// # Arguments
     ///
     /// * `reader` - The data stream used to load the SoundFont.
-    pub fn new<R: Read>(reader: &mut R) -> Result<Self, SoundFontError> {
+    pub fn new<R: Read + Seek>(reader: &mut R) -> Result<Self, SoundFontError> {
         let chunk_id = BinaryReader::read_four_cc(reader)?;
         if chunk_id != b"RIFF" {
             return Err(SoundFontError::RiffChunkNotFound);

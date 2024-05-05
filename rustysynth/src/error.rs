@@ -156,7 +156,12 @@ impl From<io::Error> for SoundFontError {
 #[non_exhaustive]
 pub enum MidiFileError {
     IoError(io::Error),
-    InvalidChunkType { expected: FourCC, actual: FourCC },
+    ThreadPoolBuild(rayon::ThreadPoolBuildError),
+    InvalidChunkType {
+        expected: FourCC,
+        actual: FourCC,
+        at: u64,
+    },
     InvalidChunkData(FourCC),
     UnsupportedFormat(i16),
     InvalidTempoValue,
@@ -175,10 +180,14 @@ impl fmt::Display for MidiFileError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             MidiFileError::IoError(err) => err.fmt(f),
-            MidiFileError::InvalidChunkType { expected, actual } => write!(
+            MidiFileError::ThreadPoolBuild(err) => err.fmt(f),
+            MidiFileError::InvalidChunkType {
+                expected,
+                actual,
+                at,
+            } => write!(
                 f,
-                "the chunk type must be '{}', but was '{}'",
-                expected, actual
+                "the chunk type must be '{expected}', but was '{actual}', at 0x{at:X}"
             ),
             MidiFileError::InvalidChunkData(id) => write!(f, "the '{}' chunk has invalid data", id),
             MidiFileError::UnsupportedFormat(format) => {
@@ -192,5 +201,11 @@ impl fmt::Display for MidiFileError {
 impl From<io::Error> for MidiFileError {
     fn from(err: io::Error) -> Self {
         MidiFileError::IoError(err)
+    }
+}
+
+impl From<rayon::ThreadPoolBuildError> for MidiFileError {
+    fn from(err: rayon::ThreadPoolBuildError) -> Self {
+        MidiFileError::ThreadPoolBuild(err)
     }
 }

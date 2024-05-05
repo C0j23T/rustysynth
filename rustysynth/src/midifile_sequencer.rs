@@ -1,10 +1,9 @@
 #![allow(dead_code)]
 
 use std::cmp;
-use std::sync::Arc;
 
 use crate::midifile::Message;
-use crate::midifile::MidiFile;
+use crate::midifile::MidiTrack;
 use crate::synthesizer::Synthesizer;
 
 /// An instance of the MIDI file sequencer.
@@ -14,7 +13,7 @@ pub struct MidiFileSequencer {
 
     speed: f64,
 
-    midi_file: Option<Arc<MidiFile>>,
+    midi_track: Option<MidiTrack>,
     play_loop: bool,
 
     block_wrote: usize,
@@ -34,7 +33,7 @@ impl MidiFileSequencer {
         Self {
             synthesizer,
             speed: 1.0,
-            midi_file: None,
+            midi_track: None,
             play_loop: false,
             block_wrote: 0,
             current_time: 0.0,
@@ -43,14 +42,14 @@ impl MidiFileSequencer {
         }
     }
 
-    /// Plays the MIDI file.
+    /// Plays the MIDI track.
     ///
     /// # Arguments
     ///
-    /// * `midi_file` - The MIDI file to be played.
+    /// * `midi_track` - The MIDI track to be played.
     /// * `play_loop` - If `true`, the MIDI file loops after reaching the end.
-    pub fn play(&mut self, midi_file: &Arc<MidiFile>, play_loop: bool) {
-        self.midi_file = Some(Arc::clone(midi_file));
+    pub fn play(&mut self, midi_track: MidiTrack, play_loop: bool) {
+        self.midi_track = Some(midi_track);
         self.play_loop = play_loop;
 
         self.block_wrote = self.synthesizer.block_size;
@@ -64,7 +63,7 @@ impl MidiFileSequencer {
 
     /// Stops playing.
     pub fn stop(&mut self) {
-        self.midi_file = None;
+        self.midi_track = None;
         self.synthesizer.reset();
     }
 
@@ -108,7 +107,7 @@ impl MidiFileSequencer {
     }
 
     fn process_events(&mut self) {
-        let midi_file = match self.midi_file.as_ref() {
+        let midi_file = match self.midi_track.as_ref() {
             Some(value) => value,
             None => return,
         };
@@ -152,9 +151,9 @@ impl MidiFileSequencer {
         &self.synthesizer
     }
 
-    /// Gets the currently playing MIDI file.
-    pub fn get_midi_file(&self) -> Option<&MidiFile> {
-        match &self.midi_file {
+    /// Gets the currently playing MIDI track.
+    pub fn get_midi_track(&self) -> Option<&MidiTrack> {
+        match &self.midi_track {
             None => None,
             Some(value) => Some(value),
         }
@@ -172,7 +171,7 @@ impl MidiFileSequencer {
     /// If the `play` method has not yet been called, this value will be `true`.
     /// This value will never be `true` if loop playback is enabled.
     pub fn end_of_sequence(&self) -> bool {
-        match &self.midi_file {
+        match &self.midi_track {
             None => true,
             Some(value) => self.msg_index == value.messages.len(),
         }
