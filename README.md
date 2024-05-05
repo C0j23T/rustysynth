@@ -12,7 +12,7 @@ I made it support multi-threaded rendering by using [rayon](https://github.com/r
 * ~~Suitable for both real-time and offline synthesis.~~ For offline only
 * ~~Supports standard MIDI files with additional features including dynamic tempo changing.~~ Currently only MIDI 1 is supported
 * ~~No dependencies other than the standard library.~~
-* It only took about 50 seconds to render 18 million notes.
+* It only took about 50 seconds to render 9KX2.
 
 
 
